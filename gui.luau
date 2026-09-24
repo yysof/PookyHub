@@ -1,8 +1,7 @@
--- language: Luau | Pooky Hub GUI v5
--- Uses yysof/ObsidianUltra fork widgets: AddPlayerInfo, AddDiscordBox, AddWatermark,
--- CreateUnsupportedScreen, Glow, animations, PillCorners.
--- AI tab: Claude via executor HTTP (request()).
--- Setup: getgenv().POOKY_ANTHROPIC_KEY = "sk-ant-..." BEFORE loading this file.
+-- language: Luau | Pooky Hub GUI v6
+-- Changes vs v5: OpenRouter API, Player/Flight split, Discord-in-every-tab, 720x600 default,
+-- sidebar logo mark, model dropdown with pricing tiers, config compat with Ouroboros.
+-- Setup: getgenv().POOKY_OPENROUTER_KEY = "sk-or-v1-..." BEFORE loading this file.
 
 -- ============ CONFIG ============
 local PookyConfig = {
@@ -10,10 +9,10 @@ local PookyConfig = {
     ASSETS_REPO  = "yysof/pooky-assets",
     DISCORD_URL  = "https://discord.gg/rkwFYkWY4d",
     RSCRIPTS_URL = "https://rscripts.net/users/pookyhub",
-    ANTHROPIC_API_KEY = (getgenv and getgenv().POOKY_ANTHROPIC_KEY) or "",
-    ANTHROPIC_MODEL   = "claude-sonnet-5",
-    LOGO_ASSET_ID     = nil,   -- set to "rbxassetid://..." once you upload the pink logo as a Roblox decal
-    BANNER_ASSET_ID   = nil,
+    OPENROUTER_KEY = (getgenv and getgenv().POOKY_OPENROUTER_KEY) or "",
+    DEFAULT_MODEL  = "google/gemini-2.5-flash",
+    LOGO_ASSET_ID   = nil,
+    BANNER_ASSET_ID = nil,
 }
 
 local REPO = "https://raw.githubusercontent.com/" .. PookyConfig.GITHUB_USER .. "/ObsidianUltra/main/"
@@ -29,7 +28,7 @@ if Library:CreateUnsupportedScreen({
         "Supported: Potassium, Delta, Krnl, Swift, Wave, Xeno, Solara, Ronin.",
         "Get install help at discord.gg/rkwFYkWY4d.",
     },
-    Footer = "Pooky Hub v0.5",
+    Footer = "Pooky Hub v0.6",
 }) then return end
 
 local ThemeManager = loadstring(game:HttpGet(REPO .. "addons/ThemeManager.lua"))()
@@ -41,8 +40,6 @@ local Toggles = Library.Toggles
 Library.ForceCheckbox = false
 Library.ShowToggleFrameInKeybinds = true
 Library.NotifySide = "Right"
-
--- turn on every animation flag (5 default off, 3 default on)
 Library.Animations = {
     ToggleWindow = true, TabSwitch = true, Groupbox = true,
     GroupboxCollapse = true, Dropdown = true, KeyPicker = true,
@@ -62,7 +59,7 @@ local LP = Players.LocalPlayer
 
 local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
 
--- ============ image loader (GitHub -> writefile -> getcustomasset) ============
+-- ============ image loader ============
 local imageCache = {}
 local function loadImage(url)
     if imageCache[url] then return imageCache[url] end
@@ -78,19 +75,21 @@ local function loadImage(url)
     return asset
 end
 
--- ============ WINDOW ============
+-- ============ WINDOW (720x600, matches Ouroboros defaults) ============
 local Window = Library:CreateWindow({
     Title = "Pooky Hub",
     Icon = PookyConfig.LOGO_ASSET_ID or "sparkles",
     NotifySide = "Right",
     ShowCustomCursor = true,
     Center = true, AutoShow = true, Resizable = true,
-    Glow = true,             -- premium accent shadow
-    Snapping = true,         -- snap to screen edges
+    Glow = true,
+    Snapping = true,
     EnableSidebarResize = true,
-    MinSidebarWidth = 140, SidebarCompactWidth = 48,
+    MinSidebarWidth = 140,
+    SidebarCompactWidth = 48,
+    SidebarCompacted = false,
     Footer = {
-        "Pooky Hub v0.5 |",
+        "Pooky Hub v0.6 |",
         { Text = "discord.gg/rkwFYkWY4d", Copyable = true, CopyText = PookyConfig.DISCORD_URL },
         "|",
         { Text = game.Name, Copyable = true, CopyText = tostring(game.PlaceId) },
@@ -100,15 +99,51 @@ local Window = Library:CreateWindow({
     Minimizable = true, MinimizeKeybind = Enum.KeyCode.RightBracket, MinimizedWidth = 320,
     NotificationHistoryLimit = 100, NotificationHistoryKeybind = Enum.KeyCode.RightAlt,
 })
-pcall(function() Window:SetCornerRadius(4) end)  -- softer corners, still terminal-y
+pcall(function() Window:SetCornerRadius(6) end)
+pcall(function() Window:SetSizePosition(
+    UDim2.fromOffset(720, 600),
+    UDim2.new(0.5, -360, 0.5, -285)
+) end)
+
+-- inject logo into sidebar top
+task.spawn(function()
+    task.wait(0.1)
+    pcall(function()
+        local mf = Library.MainFrame or Library.ScreenGui and Library.ScreenGui:FindFirstChild("Main", true)
+        if not mf then return end
+        local sidebar
+        for _, d in ipairs(mf:GetDescendants()) do
+            if d:IsA("Frame") and (d.Name:lower():find("sidebar") or d.Name:lower():find("side")) then
+                sidebar = d; break
+            end
+        end
+        if not sidebar or sidebar:FindFirstChild("PookyLogoMark") then return end
+        local logoAsset = PookyConfig.LOGO_ASSET_ID
+            or loadImage("https://raw.githubusercontent.com/" .. PookyConfig.ASSETS_REPO .. "/main/pooky-hub-logo-512.png")
+        if logoAsset == "" then return end
+        local holder = Instance.new("Frame")
+        holder.Name = "PookyLogoMark"
+        holder.BackgroundTransparency = 1
+        holder.Size = UDim2.new(1, 0, 0, 44)
+        holder.LayoutOrder = -100
+        holder.Parent = sidebar
+        local img = Instance.new("ImageLabel")
+        img.BackgroundTransparency = 1
+        img.Image = logoAsset
+        img.ScaleType = Enum.ScaleType.Fit
+        img.AnchorPoint = Vector2.new(0.5, 0.5)
+        img.Position = UDim2.fromScale(0.5, 0.5)
+        img.Size = UDim2.new(0, 32, 0, 32)
+        img.Parent = holder
+    end)
+end)
 
 local Tabs = {
-    Info      = Window:AddTab({ Name = "Info",      Icon = "info",     Description = "Session, socials, hub status" }),
-    AI        = Window:AddTab({ Name = "AI",        Icon = "sparkles", Description = "Ask Claude — scripting, strategy, game help", SingleColumn = true }),
-    Universal = Window:AddTab({ Name = "Universal", Icon = "globe",    Description = "Movement + visuals — every game" }),
-    Players   = Window:AddTab({ Name = "Players",   Icon = "users",    Description = "Teleport, spectate, list" }),
-    Server    = Window:AddTab({ Name = "Server",    Icon = "server",   Description = "Rejoin, hop, job info" }),
-    Settings  = Window:AddTab({ Name = "Settings",  Icon = "settings", Description = "Theme, keybinds, configs" }),
+    Info      = Window:AddTab({ Name = "Info",     Icon = "info",     Description = "Session, socials, hub status" }),
+    AI        = Window:AddTab({ Name = "AI",       Icon = "sparkles", Description = "Ask Claude / Gemini — scripting, game help", SingleColumn = true }),
+    Player    = Window:AddTab({ Name = "Player",   Icon = "user-round",   Description = "Movement, flight, character" }),
+    Server    = Window:AddTab({ Name = "Server",   Icon = "server",   Description = "Rejoin, hop, job info, players" }),
+    Settings  = Window:AddTab({ Name = "Settings", Icon = "settings", Description = "Theme, keybinds, configs" }),
 }
 
 -- ============ HELPERS ============
@@ -140,56 +175,15 @@ function helpers.loop(iv, fn, flag) task.spawn(function() while task.wait(iv) do
     if Library.Unloaded then break end
     if flag == nil or (Toggles[flag] and Toggles[flag].Value) then pcall(fn) end end end) end
 
--- ============ INFO TAB (PlayerInfo banner + DiscordBox + session + socials) ============
-do
-    local execName, execVer = helpers.exec()
-    local sessionStart = tick()
-
-    -- full-width banner using fork's PlayerInfo widget
-    local UserBanner = Tabs.Info:AddPlayerInfo("PookyUserBanner", {
-        Player = LP,
-        Title = string.format("<b>%s</b>  <font color=\"#C7C7CE\">@%s</font>", LP.DisplayName, LP.Name),
-        Description = {
-            string.format("<font color=\"#8E8E9E\">UserId</font>  %d", LP.UserId),
-            string.format("<font color=\"#8E8E9E\">Executor</font>  %s%s", execName, execVer ~= "" and (" " .. execVer) or ""),
-            "<font color=\"#8E8E9E\">Session</font>  0s",
-        },
-        ThumbnailType = "Bust",
-        Height = 96,
-    })
-
-    task.spawn(function() while not Library.Unloaded do
-        local t = math.floor(tick() - sessionStart)
-        local h, m, s = math.floor(t/3600), math.floor((t%3600)/60), t%60
-        local sess = (h>0) and string.format("%dh %dm %ds", h,m,s)
-            or (m>0) and string.format("%dm %ds", m,s) or string.format("%ds", s)
-        pcall(function() UserBanner:SetDescription({
-            string.format("<font color=\"#8E8E9E\">UserId</font>  %d", LP.UserId),
-            string.format("<font color=\"#8E8E9E\">Executor</font>  %s%s", execName, execVer ~= "" and (" " .. execVer) or ""),
-            string.format("<font color=\"#8E8E9E\">Session</font>  %s", sess),
-        }) end)
-        task.wait(1) end end)
-
-    -- left: quick actions
-    local ActBox = Tabs.Info:AddLeftGroupbox("Quick Actions", "zap")
-    ActBox:AddButton({ Text = "Copy Username", Func = function()
-        helpers.clip(LP.Name); helpers.notify("Copied", LP.Name, 2, "Success") end })
-    ActBox:AddButton({ Text = "Copy Profile Link", Func = function()
-        local l = "https://www.roblox.com/users/" .. LP.UserId .. "/profile"
-        helpers.clip(l); helpers.notify("Copied", l, 2, "Success") end })
-    ActBox:AddButton({ Text = "Copy Job ID", Func = function()
-        helpers.clip(game.JobId); helpers.notify("Copied", game.JobId, 2, "Success") end })
-    ActBox:AddButton({ Text = "Rejoin Server", Func = function() TeleportService:Teleport(game.PlaceId, LP) end })
-    ActBox:AddButton({ Text = "Server Hop", Func = helpers.serverHop })
-
-    -- right: fork's DiscordBox widget (proper Ouroboros-style card)
+-- ============ reusable Discord card factory (used in every tab) ============
+local function addDiscordBox(tab, side)
     local bannerImg = PookyConfig.BANNER_ASSET_ID
         or loadImage("https://raw.githubusercontent.com/" .. PookyConfig.ASSETS_REPO .. "/main/pooky-hub-banner.png")
     local logoImg = PookyConfig.LOGO_ASSET_ID
         or loadImage("https://raw.githubusercontent.com/" .. PookyConfig.ASSETS_REPO .. "/main/pooky-hub-logo-512.png")
-
-    local DiscBox = Tabs.Info:AddRightGroupbox("Community", "message-circle")
-    DiscBox:AddDiscordBox("PookyDiscord", {
+    local box = (side == "Left") and tab:AddLeftGroupbox("Discord", "message-circle")
+        or tab:AddRightGroupbox("Discord", "message-circle")
+    box:AddDiscordBox("PookyDiscord_" .. tab.Name, {
         Banner = bannerImg ~= "" and bannerImg or nil,
         BannerColor = "AccentColor",
         Avatar = logoImg ~= "" and logoImg or nil,
@@ -197,45 +191,154 @@ do
         Title = "Pooky Hub",
         Subtitle = "Keyless scripts, live updates",
         Status = "online",
-        Accent = "AccentColor",
+        Accent = "BlueColor",
         Link = PookyConfig.DISCORD_URL,
         Buttons = {
-            { Text = "Copy Invite", Icon = "copy", Copy = true },
-            { Text = "Open Discord", Icon = "external-link", Style = "Secondary",
-              Func = function(url) helpers.clip(url); helpers.notify("Link copied", url, 2, "Info") end },
+            { Text = "Copy Discord Invite", Icon = "copy", Copy = true },
         },
         BannerHeight = 72, AvatarSize = 60,
     })
-
-    -- right: session
-    local SessBox = Tabs.Info:AddRightGroupbox("Session Info", "activity")
-    SessBox:AddLabel("Game: " .. game.Name)
-    local playersLbl = SessBox:AddLabel("Players: " .. #Players:GetPlayers())
-    local pingLbl = SessBox:AddLabel("Ping: " .. helpers.getPingMs() .. "ms")
-    local jobShort = (#game.JobId > 12) and (game.JobId:sub(1,8) .. "-" .. game.JobId:sub(-4)) or game.JobId
-    SessBox:AddLabel("Job: " .. jobShort)
-    Players.PlayerAdded:Connect(function() pcall(function() playersLbl:SetText("Players: " .. #Players:GetPlayers()) end) end)
-    Players.PlayerRemoving:Connect(function() pcall(function() playersLbl:SetText("Players: " .. (#Players:GetPlayers()-1)) end) end)
-    helpers.loop(2, function() pcall(function() pingLbl:SetText("Ping: " .. helpers.getPingMs() .. "ms") end) end)
-
-    -- right: socials
-    local SocBox = Tabs.Info:AddRightGroupbox("Socials", "link")
-    SocBox:AddButton({ Text = "Copy Discord",  Func = function() helpers.clip(PookyConfig.DISCORD_URL); helpers.notify("Copied", PookyConfig.DISCORD_URL, 2, "Success") end })
-    SocBox:AddButton({ Text = "Copy Rscripts", Func = function() helpers.clip(PookyConfig.RSCRIPTS_URL); helpers.notify("Copied", PookyConfig.RSCRIPTS_URL, 2, "Success") end })
+    return box
 end
 
--- ============ AI TAB (Claude chat via executor HTTP) ============
+-- ============ INFO TAB (User, Discord, Session, Socials) ============
+do
+    local execName, execVer = helpers.exec()
+    local sessionStart = tick()
+
+    -- LEFT: User card (vertical, centered avatar — Ouroboros style)
+    local UserBox = Tabs.Info:AddLeftGroupbox("User", "user")
+
+    local avatarHolder = Instance.new("Frame")
+    avatarHolder.BackgroundTransparency = 1
+    avatarHolder.Size = UDim2.new(1, 0, 0, 180)
+    avatarHolder.LayoutOrder = -10
+    avatarHolder.Parent = UserBox.Container
+
+    local avatarFrame = Instance.new("Frame")
+    avatarFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+    avatarFrame.BorderSizePixel = 0
+    avatarFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+    avatarFrame.Position = UDim2.fromScale(0.5, 0.5)
+    avatarFrame.Size = UDim2.new(0, 150, 0, 170)
+    avatarFrame.Parent = avatarHolder
+    local ac = Instance.new("UICorner"); ac.CornerRadius = UDim.new(0, 8); ac.Parent = avatarFrame
+    local as = Instance.new("UIStroke"); as.Color = Color3.fromRGB(45,45,52); as.Thickness = 1; as.Parent = avatarFrame
+
+    local avatarImg = Instance.new("ImageLabel")
+    avatarImg.BackgroundTransparency = 1
+    avatarImg.Size = UDim2.new(1, -8, 1, -8)
+    avatarImg.Position = UDim2.new(0, 4, 0, 4)
+    avatarImg.Image = string.format("rbxthumb://type=AvatarBust&id=%d&w=420&h=420", LP.UserId)
+    avatarImg.ScaleType = Enum.ScaleType.Fit
+    avatarImg.Parent = avatarFrame
+
+    -- styled labels below avatar
+    local function styledLabel(prefix, value, layoutOrder)
+        local lbl = Instance.new("TextLabel")
+        lbl.BackgroundTransparency = 1
+        lbl.Size = UDim2.new(1, -8, 0, 18)
+        lbl.Font = Enum.Font.Code
+        lbl.TextSize = 13
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.RichText = true
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
+        lbl.LayoutOrder = layoutOrder or 0
+        lbl.Text = string.format("<b>%s</b>  <font color=\"rgb(255,105,180)\">%s</font>", prefix, tostring(value))
+        lbl.Parent = UserBox.Container
+        return lbl
+    end
+    styledLabel("User",     LP.DisplayName .. "  @" .. LP.Name, -5)
+    styledLabel("UserId",   tostring(LP.UserId), -4)
+    styledLabel("Executor", execName .. (execVer ~= "" and (" " .. execVer) or "") .. "  (ready)", -3)
+    local sessLbl = styledLabel("Session", "0s", -2)
+
+    UserBox:AddDivider()
+    UserBox:AddButton({ Text = "Copy Username", Func = function()
+        helpers.clip(LP.Name); helpers.notify("Copied", LP.Name, 2, "Success") end })
+    UserBox:AddButton({ Text = "Copy Profile Link", Func = function()
+        local l = "https://www.roblox.com/users/" .. LP.UserId .. "/profile"
+        helpers.clip(l); helpers.notify("Copied", l, 2, "Success") end })
+
+    task.spawn(function() while not Library.Unloaded do
+        local t = math.floor(tick() - sessionStart)
+        local h, m, s = math.floor(t/3600), math.floor((t%3600)/60), t%60
+        local txt = (h>0) and string.format("%dh %dm %ds", h,m,s)
+            or (m>0) and string.format("%dm %ds", m,s) or string.format("%ds", s)
+        pcall(function() sessLbl.Text = string.format("<b>Session</b>  <font color=\"rgb(255,105,180)\">%s</font>", txt) end)
+        task.wait(1) end end)
+
+    -- RIGHT 1: Discord
+    addDiscordBox(Tabs.Info, "Right")
+
+    -- RIGHT 2: Session (live)
+    local SessBox = Tabs.Info:AddRightGroupbox("Session", "activity")
+    local function sessLabel(prefix, value, layoutOrder)
+        local lbl = Instance.new("TextLabel")
+        lbl.BackgroundTransparency = 1
+        lbl.Size = UDim2.new(1, -8, 0, 18)
+        lbl.Font = Enum.Font.Code; lbl.TextSize = 13
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.RichText = true
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
+        lbl.LayoutOrder = layoutOrder or 0
+        lbl.Text = string.format("<b>%s</b>  <font color=\"rgb(255,105,180)\">%s</font>", prefix, tostring(value))
+        lbl.Parent = SessBox.Container
+        return lbl
+    end
+    sessLabel("Game", game.Name, 1)
+    local playersLbl = sessLabel("Players", tostring(#Players:GetPlayers()), 2)
+    local jobShort = (#game.JobId > 12) and (game.JobId:sub(1,8) .. "-" .. game.JobId:sub(-4)) or game.JobId
+    sessLabel("Job", jobShort, 3)
+    local pingLbl = sessLabel("Ping", helpers.getPingMs() .. "ms", 4)
+    SessBox:AddDivider()
+    SessBox:AddButton({ Text = "Rejoin Place", Func = function() TeleportService:Teleport(game.PlaceId, LP) end })
+    SessBox:AddButton({ Text = "Copy Job ID", Func = function()
+        helpers.clip(game.JobId); helpers.notify("Copied", game.JobId, 2, "Success") end })
+
+    Players.PlayerAdded:Connect(function()
+        pcall(function() playersLbl.Text = string.format("<b>Players</b>  <font color=\"rgb(255,105,180)\">%d</font>", #Players:GetPlayers()) end) end)
+    Players.PlayerRemoving:Connect(function()
+        pcall(function() playersLbl.Text = string.format("<b>Players</b>  <font color=\"rgb(255,105,180)\">%d</font>", #Players:GetPlayers()-1) end) end)
+    helpers.loop(2, function()
+        pcall(function() pingLbl.Text = string.format("<b>Ping</b>  <font color=\"rgb(255,105,180)\">%dms</font>", helpers.getPingMs()) end) end)
+
+    -- RIGHT 3: Socials
+    local SocBox = Tabs.Info:AddRightGroupbox("Socials", "link")
+    SocBox:AddButton({ Text = "Copy Discord",  Func = function() helpers.clip(PookyConfig.DISCORD_URL);  helpers.notify("Copied", PookyConfig.DISCORD_URL, 2, "Success") end })
+    SocBox:AddButton({ Text = "Copy Rscripts", Func = function() helpers.clip(PookyConfig.RSCRIPTS_URL); helpers.notify("Copied", PookyConfig.RSCRIPTS_URL, 2, "Success") end })
+    SocBox:AddButton({ Text = "Copy YouTube",  Func = function()
+        local yt = "https://youtube.com/@pookyhub"
+        helpers.clip(yt); helpers.notify("Copied", yt, 2, "Success") end })
+end
+
+-- ============ AI TAB (OpenRouter, model selector, run-as-script) ============
 do
     local ACCENT_USER = Color3.fromRGB(255, 105, 180)
     local BUBBLE_AI   = Color3.fromRGB(28, 28, 34)
     local TEXT_LIGHT  = Color3.fromRGB(240, 240, 245)
     local TEXT_MUTED  = Color3.fromRGB(150, 150, 160)
 
+    -- OpenRouter model catalog with per-1M-token pricing (approx, keep for cost calc)
+    local MODELS = {
+        { id = "google/gemini-2.5-flash",      label = "Gemini 2.5 Flash (cheap)",   inCost = 0.30, outCost = 2.50 },
+        { id = "google/gemini-2.5-pro",        label = "Gemini 2.5 Pro",             inCost = 1.25, outCost = 10.00 },
+        { id = "anthropic/claude-sonnet-4",    label = "Claude Sonnet 4 (best code)", inCost = 3.00, outCost = 15.00 },
+        { id = "anthropic/claude-haiku-4-5",   label = "Claude Haiku 4.5 (fast)",    inCost = 1.00, outCost = 5.00 },
+        { id = "openai/gpt-4.1-mini",          label = "GPT-4.1 Mini",               inCost = 0.40, outCost = 1.60 },
+        { id = "deepseek/deepseek-chat-v3",    label = "DeepSeek V3 (cheapest)",     inCost = 0.14, outCost = 0.28 },
+    }
+    local modelById = {}
+    local modelLabels = {}
+    for _, m in ipairs(MODELS) do modelById[m.id] = m; table.insert(modelLabels, m.label) end
+    local labelToId = {}
+    for _, m in ipairs(MODELS) do labelToId[m.label] = m.id end
+
+    local currentModel = PookyConfig.DEFAULT_MODEL
     local chatHistory, totalCost, messageCount, sending = {}, 0, 0, false
 
     local ChatBox = Tabs.AI:AddLeftGroupbox("Chat with Pooky AI", "message-square")
 
-    -- inject ScrollingFrame for messages
     local scrollHolder = Instance.new("Frame")
     scrollHolder.BackgroundTransparency = 1
     scrollHolder.Size = UDim2.new(1, -4, 0, 320)
@@ -252,8 +355,7 @@ do
     scroll.Parent = scrollHolder
 
     local list = Instance.new("UIListLayout")
-    list.SortOrder = Enum.SortOrder.LayoutOrder
-    list.Padding = UDim.new(0, 6); list.Parent = scroll
+    list.SortOrder = Enum.SortOrder.LayoutOrder; list.Padding = UDim.new(0, 6); list.Parent = scroll
     local pad = Instance.new("UIPadding")
     pad.PaddingLeft = UDim.new(0, 4); pad.PaddingRight = UDim.new(0, 4)
     pad.PaddingTop = UDim.new(0, 4);  pad.PaddingBottom = UDim.new(0, 4)
@@ -265,24 +367,18 @@ do
         wrap.Size = UDim2.new(1, 0, 0, 0)
         wrap.AutomaticSize = Enum.AutomaticSize.Y
         wrap.LayoutOrder = #scroll:GetChildren()
-
         local bubble = Instance.new("Frame")
         bubble.BackgroundColor3 = (role == "user") and ACCENT_USER
-            or (role == "assistant") and BUBBLE_AI
-            or Color3.fromRGB(80, 40, 40)
+            or (role == "assistant") and BUBBLE_AI or Color3.fromRGB(80, 40, 40)
         bubble.BorderSizePixel = 0
         bubble.AutomaticSize = Enum.AutomaticSize.Y
         bubble.Size = UDim2.new(0.85, 0, 0, 0)
-        if role == "user" then
-            bubble.AnchorPoint = Vector2.new(1, 0); bubble.Position = UDim2.new(1, 0, 0, 0)
-        end
+        if role == "user" then bubble.AnchorPoint = Vector2.new(1, 0); bubble.Position = UDim2.new(1, 0, 0, 0) end
         bubble.Parent = wrap
-
-        local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 8); corner.Parent = bubble
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = bubble
         local bp = Instance.new("UIPadding")
         bp.PaddingLeft = UDim.new(0, 10); bp.PaddingRight = UDim.new(0, 10)
-        bp.PaddingTop = UDim.new(0, 8); bp.PaddingBottom = UDim.new(0, 8); bp.Parent = bubble
-
+        bp.PaddingTop = UDim.new(0, 8);   bp.PaddingBottom = UDim.new(0, 8); bp.Parent = bubble
         local label = Instance.new("TextLabel")
         label.BackgroundTransparency = 1
         label.Font = Enum.Font.Gotham; label.TextSize = 13
@@ -294,7 +390,6 @@ do
         label.AutomaticSize = Enum.AutomaticSize.Y
         label.Text = text; label.RichText = true
         label.Parent = bubble
-
         wrap.Parent = scroll
         task.wait()
         scroll.CanvasPosition = Vector2.new(0, scroll.AbsoluteCanvasSize.Y)
@@ -308,7 +403,7 @@ do
         end
     end
 
-    -- input row (custom because Obsidian's AddInput has no send button)
+    -- input row
     local inputHolder = Instance.new("Frame")
     inputHolder.BackgroundTransparency = 1
     inputHolder.Size = UDim2.new(1, -4, 0, 34)
@@ -343,12 +438,14 @@ do
     sendBtn.Text = "Send"; sendBtn.Parent = inputHolder
     local sc = Instance.new("UICorner"); sc.CornerRadius = UDim.new(0, 6); sc.Parent = sendBtn
 
-    -- settings / stats
+    -- settings + stats
     local CtrlBox = Tabs.AI:AddLeftGroupbox("Settings & Stats", "settings-2")
+    local defaultLabel = modelById[currentModel] and modelById[currentModel].label or modelLabels[1]
     CtrlBox:AddDropdown("PookyAIModel", {
-        Values = { "claude-sonnet-5", "claude-opus-5-5", "claude-haiku-4-5-20251001" },
-        Default = PookyConfig.ANTHROPIC_MODEL, Text = "Model",
-        Callback = function(v) PookyConfig.ANTHROPIC_MODEL = v end,
+        Values = modelLabels, Default = defaultLabel, Text = "Model",
+        Callback = function(v)
+            local id = labelToId[v]; if id then currentModel = id end
+        end,
     })
     local costLbl = CtrlBox:AddLabel("Session cost: $0.0000")
     local msgLbl  = CtrlBox:AddLabel("Messages: 0")
@@ -383,37 +480,45 @@ do
         end
     end })
 
-    -- send handler
+    -- send handler (OpenRouter format)
     local function sendMessage()
         if sending then return end
         local text = textBox.Text
         if text == "" or text:match("^%s*$") then return end
         if not httpRequest then appendMessage("system", "No HTTP request function in this executor. AI disabled."); return end
-        if PookyConfig.ANTHROPIC_API_KEY == "" then
-            appendMessage("system", "No API key. Before loading the hub run:  getgenv().POOKY_ANTHROPIC_KEY = \"sk-ant-...\"")
+        if PookyConfig.OPENROUTER_KEY == "" then
+            appendMessage("system", "No API key. Before loading the hub run:  getgenv().POOKY_OPENROUTER_KEY = \"sk-or-v1-...\"")
             return
         end
         textBox.Text = ""; appendMessage("user", text)
         sending = true; sendBtn.Text = "..."; sendBtn.BackgroundColor3 = Color3.fromRGB(80,80,90)
 
         task.spawn(function()
+            local msgsWithSystem = {
+                { role = "system", content =
+                    "You are Pooky, an AI assistant inside a Roblox script executor. "
+                    .. "Current game: " .. game.Name .. " (placeId " .. game.PlaceId .. "). "
+                    .. "User: " .. LP.DisplayName .. ". "
+                    .. "Help with Luau scripting, farming strategies, remote analysis, and game questions. "
+                    .. "Be concise. Wrap code in ```lua fenced blocks so the executor can run the last one via a button."
+                },
+            }
+            for _, m in ipairs(chatHistory) do table.insert(msgsWithSystem, m) end
+
             local body = HttpService:JSONEncode({
-                model = PookyConfig.ANTHROPIC_MODEL,
+                model = currentModel,
                 max_tokens = 1024,
-                system = "You are Pooky, an AI assistant inside a Roblox script executor. Current game: " .. game.Name
-                    .. " (placeId " .. game.PlaceId .. "). User: " .. LP.DisplayName
-                    .. ". Help with Luau scripting, farming strategies, remote analysis, and game questions."
-                    .. " Be concise. Use ```lua fenced code blocks for code (the executor can run the last block via a button).",
-                messages = chatHistory,
+                messages = msgsWithSystem,
             })
             local ok, resp = pcall(function()
                 return httpRequest({
-                    Url = "https://api.anthropic.com/v1/messages",
+                    Url = "https://openrouter.ai/api/v1/chat/completions",
                     Method = "POST",
                     Headers = {
                         ["Content-Type"] = "application/json",
-                        ["x-api-key"] = PookyConfig.ANTHROPIC_API_KEY,
-                        ["anthropic-version"] = "2023-06-01",
+                        ["Authorization"] = "Bearer " .. PookyConfig.OPENROUTER_KEY,
+                        ["HTTP-Referer"] = "https://github.com/yysof/PookyHub",
+                        ["X-Title"] = "Pooky Hub",
                     },
                     Body = body,
                 })
@@ -426,35 +531,44 @@ do
             end
             local pok, parsed = pcall(HttpService.JSONDecode, HttpService, resp.Body or "")
             if not pok then appendMessage("system", "Failed to parse response"); return end
-            if parsed.content and parsed.content[1] and parsed.content[1].text then
-                appendMessage("assistant", parsed.content[1].text)
+            if parsed.choices and parsed.choices[1] and parsed.choices[1].message then
+                local content = parsed.choices[1].message.content or ""
+                appendMessage("assistant", content)
                 if parsed.usage then
-                    local ic_ = (parsed.usage.input_tokens or 0) * 3 / 1000000
-                    local oc = (parsed.usage.output_tokens or 0) * 15 / 1000000
-                    totalCost = totalCost + ic_ + oc
-                    pcall(function() costLbl:SetText(string.format("Session cost: $%.4f", totalCost)) end)
+                    local model = modelById[currentModel]
+                    if model then
+                        local ic_ = (parsed.usage.prompt_tokens or 0) * model.inCost / 1000000
+                        local oc  = (parsed.usage.completion_tokens or 0) * model.outCost / 1000000
+                        totalCost = totalCost + ic_ + oc
+                        pcall(function() costLbl:SetText(string.format("Session cost: $%.4f", totalCost)) end)
+                    end
                 end
                 pcall(function() msgLbl:SetText("Messages: " .. messageCount) end)
             elseif parsed.error then appendMessage("system", "API error: " .. tostring(parsed.error.message))
-            else appendMessage("system", "Unexpected response shape") end
+            else appendMessage("system", "Unexpected response shape: " .. tostring(resp.Body):sub(1, 200)) end
         end)
     end
 
     sendBtn.MouseButton1Click:Connect(sendMessage)
-    textBox.FocusLost:Connect(function(enterPressed) if enterPressed then sendMessage() end end)
+    textBox.FocusLost:Connect(function(enter) if enter then sendMessage() end end)
 
-    appendMessage("system", "Pooky AI ready. Game context is auto-included. Ask for scripts and I'll wrap them in ```lua so you can hit 'Run Last AI Reply' below.")
+    appendMessage("system", "Pooky AI ready via OpenRouter. Cheapest model (DeepSeek V3) selected by default in Settings — swap to Claude Sonnet for complex scripts. Game context is auto-included.")
 end
 
--- ============ UNIVERSAL ============
+-- ============ PLAYER TAB (Movement + Flight split, Discord card) ============
 do
-    local UGroup = Tabs.Universal:AddLeftGroupbox("Movement", "footprints")
-    UGroup:AddSlider("PookyWalkSpeed", { Text = "WalkSpeed", Default = 16, Min = 16, Max = 250, Rounding = 0, Suffix = " studs/s",
-        Callback = function(v) local _,_,h = helpers.getChar(); if h then h.WalkSpeed = v end end })
-    UGroup:AddSlider("PookyJumpPower", { Text = "JumpPower", Default = 50, Min = 50, Max = 500, Rounding = 0,
-        Callback = function(v) local _,_,h = helpers.getChar(); if h then h.JumpPower = v end end })
-    UGroup:AddToggle("PookyInfJump", { Text = "Infinite Jump", Default = false })
-    UGroup:AddToggle("PookyNoclip",  { Text = "Noclip",         Default = false })
+    -- Movement
+    local MoveBox = Tabs.Player:AddLeftGroupbox("Movement", "footprints")
+    MoveBox:AddSlider("PookyWalkSpeed", {
+        Text = "WalkSpeed", Default = 16, Min = 16, Max = 250, Rounding = 0, Suffix = " studs/s",
+        Callback = function(v) local _,_,h = helpers.getChar(); if h then h.WalkSpeed = v end end,
+    })
+    MoveBox:AddSlider("PookyJumpPower", {
+        Text = "JumpPower", Default = 50, Min = 50, Max = 500, Rounding = 0,
+        Callback = function(v) local _,_,h = helpers.getChar(); if h then h.JumpPower = v end end,
+    })
+    MoveBox:AddToggle("PookyInfJump", { Text = "Infinite Jump", Default = false })
+    MoveBox:AddToggle("PookyNoclip",  { Text = "Noclip", Default = false })
 
     UserInputService.JumpRequest:Connect(function()
         if Toggles.PookyInfJump and Toggles.PookyInfJump.Value then
@@ -465,16 +579,74 @@ do
             if c then for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end
         end end)
 
-    local VGroup = Tabs.Universal:AddRightGroupbox("Visuals", "eye")
-    VGroup:AddToggle("PookyFullBright", { Text = "Full Bright", Default = false,
+    -- Flight (separated per Ouroboros pattern)
+    local FlyBox = Tabs.Player:AddLeftGroupbox("Flight", "plane")
+    FlyBox:AddToggle("PookyFly", { Text = "Fly", Default = false })
+    FlyBox:AddSlider("PookyFlySpeed", {
+        Text = "Fly Speed", Default = 60, Min = 10, Max = 300, Rounding = 0, Suffix = " studs/s",
+    })
+
+    -- Fly loop (BodyVelocity-based, simple mobile-friendly)
+    local flyBV, flyBG
+    local function stopFly()
+        if flyBV then flyBV:Destroy(); flyBV = nil end
+        if flyBG then flyBG:Destroy(); flyBG = nil end
+        local _,_,h = helpers.getChar()
+        if h then h.PlatformStand = false end
+    end
+    local function startFly()
+        local _, hrp, hum = helpers.getChar()
+        if not hrp then return end
+        hum.PlatformStand = true
+        flyBV = Instance.new("BodyVelocity")
+        flyBV.MaxForce = Vector3.new(1,1,1) * math.huge
+        flyBV.Velocity = Vector3.new(0,0,0)
+        flyBV.Parent = hrp
+        flyBG = Instance.new("BodyGyro")
+        flyBG.MaxTorque = Vector3.new(1,1,1) * math.huge
+        flyBG.P = 10000
+        flyBG.CFrame = hrp.CFrame
+        flyBG.Parent = hrp
+    end
+
+    RunService.RenderStepped:Connect(function()
+        if Toggles.PookyFly and Toggles.PookyFly.Value then
+            if not flyBV then startFly() end
+            local _, hrp = helpers.getChar()
+            local cam = Workspace.CurrentCamera
+            if not hrp or not cam or not flyBV or not flyBG then return end
+            local speed = Options.PookyFlySpeed and Options.PookyFlySpeed.Value or 60
+            local move = Vector3.new(0,0,0)
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + cam.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - cam.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - cam.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + cam.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0,1,0) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move = move - Vector3.new(0,1,0) end
+            flyBV.Velocity = (move.Magnitude > 0 and move.Unit or Vector3.new()) * speed
+            flyBG.CFrame = cam.CFrame
+        elseif flyBV then stopFly() end
+    end)
+
+    -- Visuals
+    local VisBox = Tabs.Player:AddRightGroupbox("Visuals", "eye")
+    VisBox:AddToggle("PookyFullBright", { Text = "Full Bright", Default = false,
         Callback = function(v) if v then Lighting.Brightness=3; Lighting.ClockTime=14; Lighting.FogEnd=100000; Lighting.GlobalShadows=false
             else Lighting.Brightness=2; Lighting.GlobalShadows=true end end })
-    VGroup:AddToggle("PookyESP", { Text = "Player ESP", Default = false })
+    VisBox:AddToggle("PookyESP", { Text = "Player ESP", Default = false })
+
+    -- Discord card (Ouroboros pattern: repeat in every tab)
+    addDiscordBox(Tabs.Player, "Right")
 end
 
--- ============ PLAYERS ============
+-- ============ SERVER TAB ============
 do
-    local PG = Tabs.Players:AddLeftGroupbox("Actions", "user")
+    local SG = Tabs.Server:AddLeftGroupbox("Actions", "activity")
+    SG:AddButton({ Text = "Rejoin",      Func = function() TeleportService:Teleport(game.PlaceId, LP) end })
+    SG:AddButton({ Text = "Server Hop",  Func = helpers.serverHop })
+    SG:AddButton({ Text = "Copy Job ID", Func = function() helpers.clip(game.JobId); helpers.notify("Copied", game.JobId, 2, "Success") end })
+
+    local PG = Tabs.Server:AddLeftGroupbox("Players", "users")
     PG:AddDropdown("PookyPlayerTarget", { SpecialType = "Player", ExcludeLocalPlayer = true, Text = "Select Player" })
     PG:AddButton({ Text = "Teleport To", Func = function()
         local p = Players:FindFirstChild(Options.PookyPlayerTarget.Value); if p then helpers.teleport(p) end end })
@@ -483,19 +655,11 @@ do
         if p and p.Character then Workspace.CurrentCamera.CameraSubject = p.Character:FindFirstChildOfClass("Humanoid") end end })
     PG:AddButton({ Text = "Reset Camera", Func = function()
         local _,_,h = helpers.getChar(); if h then Workspace.CurrentCamera.CameraSubject = h end end })
+
+    addDiscordBox(Tabs.Server, "Right")
 end
 
--- ============ SERVER ============
-do
-    local SG = Tabs.Server:AddLeftGroupbox("Actions", "activity")
-    SG:AddButton({ Text = "Rejoin",      Func = function() TeleportService:Teleport(game.PlaceId, LP) end })
-    SG:AddButton({ Text = "Server Hop",  Func = helpers.serverHop })
-    SG:AddButton({ Text = "Copy Job ID", Func = function() helpers.clip(game.JobId); helpers.notify("Copied", game.JobId, 2, "Success") end })
-    local I = Tabs.Server:AddRightGroupbox("Info", "info")
-    I:AddLabel("Game: " .. game.Name); I:AddLabel("PlaceId: " .. game.PlaceId); I:AddLabel("Players: " .. #Players:GetPlayers())
-end
-
--- ============ SETTINGS ============
+-- ============ SETTINGS TAB ============
 do
     local M = Tabs.Settings:AddLeftGroupbox("Menu", "wrench")
     M:AddToggle("KeybindMenuOpen", { Text = "Show Keybind Menu", Default = Library.KeybindFrame.Visible,
@@ -505,6 +669,15 @@ do
     M:AddButton("Unload Hub", function() Library:Unload() end)
     M:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = "RightShift", NoUI = true, Text = "Menu keybind" })
     Library.ToggleKeybind = Options.MenuKeybind
+
+    local SC = Tabs.Settings:AddLeftGroupbox("Script", "code")
+    SC:AddLabel("Pooky Hub  v0.6")
+    SC:AddLabel("Framework: ObsidianUltra fork")
+    SC:AddLabel("Loader: yysof/PookyHub")
+    SC:AddButton({ Text = "Check for updates", Func = function()
+        helpers.notify("Update check", "no version endpoint yet", 3, "Info") end })
+
+    addDiscordBox(Tabs.Settings, "Left")
 
     ThemeManager:SetLibrary(Library); SaveManager:SetLibrary(Library)
     SaveManager:IgnoreThemeSettings()
@@ -517,7 +690,7 @@ do
     pcall(function() SaveManager:LoadAutoloadConfig() end)
 end
 
--- ============ WATERMARK (floating status bar) ============
+-- ============ WATERMARK ============
 local Watermark = Library:AddWatermark({
     { Player = LP, NameType = "Username" },
     { Icon = "flame",     Text = "Pooky Hub", Accent = true },
@@ -527,7 +700,7 @@ local Watermark = Library:AddWatermark({
 })
 Watermark.RefreshRate = 1
 
-helpers.notify("Pooky Hub loaded", game.Name .. "  |  AI: " .. (PookyConfig.ANTHROPIC_API_KEY ~= "" and "ready" or "no key set"), 3, "Success")
+helpers.notify("Pooky Hub loaded", game.Name .. "  |  AI: " .. (PookyConfig.OPENROUTER_KEY ~= "" and "ready (OpenRouter)" or "no key"), 3, "Success")
 
 return {
     Library = Library, Window = Window, Options = Options, Toggles = Toggles,
